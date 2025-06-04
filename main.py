@@ -5,31 +5,30 @@ from keep_alive import keep_alive
 from news_handler import handle_news
 from undervalued_stocks import analyze_undervalued_stocks
 
-# Получаем API-ключ из переменных окружения
+# Получаем ключ API из переменной окружения
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 
-# Инициализируем бота и апдейтера
+# Проверка: если токен не найден — не запускаемся
+if not TELEGRAM_API_KEY:
+    raise ValueError("TELEGRAM_API_KEY is not set in environment variables")
+
+# Настройка бота
 bot = Bot(token=TELEGRAM_API_KEY)
 updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
 dispatcher = updater.dispatcher
 
-# Команда /start
+# Обработчики команд
 def start(update, context):
     print(f"User {update.effective_user.id} sent /start")
     context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Я бот для анализа новостей и недооцененных акций.")
 
-# Команда /news
-def send_news(update, context):
+def news(update, context):
     print(f"User {update.effective_user.id} sent /news")
     articles = handle_news()
-    if articles:
-        for article in articles:
-            context.bot.send_message(chat_id=update.effective_chat.id, text=article)
-    else:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Нет свежих новостей.")
+    for article in articles:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=article)
 
-# Команда /undervalued
-def send_undervalued(update, context):
+def undervalued(update, context):
     print(f"User {update.effective_user.id} sent /undervalued")
     tickers = ["AAPL", "MSFT", "GOOG"]
     stocks = analyze_undervalued_stocks(tickers)
@@ -39,10 +38,10 @@ def send_undervalued(update, context):
     else:
         context.bot.send_message(chat_id=update.effective_chat.id, text="Нет недооценённых акций.")
 
-# Регистрируем команды
+# Регистрация команд
 dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("news", send_news))
-dispatcher.add_handler(CommandHandler("undervalued", send_undervalued))
+dispatcher.add_handler(CommandHandler("news", news))
+dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
 # Запускаем Flask-сервер для Render
 keep_alive()
