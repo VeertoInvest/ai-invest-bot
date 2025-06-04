@@ -1,27 +1,36 @@
 import os
-import schedule
-import time
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
-from keep_alive import keep_alive  # добавлено
+from keep_alive import keep_alive
 from news_handler import handle_news
 from undervalued_stocks import analyze_undervalued_stocks
 
+# Получаем API-ключ из переменных окружения
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 
+# Инициализируем бота и апдейтера
 bot = Bot(token=TELEGRAM_API_KEY)
 updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
 dispatcher = updater.dispatcher
 
+# Команда /start
 def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Бот активен!")
+    print(f"User {update.effective_user.id} sent /start")
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Я бот для анализа новостей и недооцененных акций.")
 
-def news(update, context):
+# Команда /news
+def send_news(update, context):
+    print(f"User {update.effective_user.id} sent /news")
     articles = handle_news()
-    for article in articles:
-        context.bot.send_message(chat_id=update.effective_chat.id, text=article)
+    if articles:
+        for article in articles:
+            context.bot.send_message(chat_id=update.effective_chat.id, text=article)
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Нет свежих новостей.")
 
-def undervalued(update, context):
+# Команда /undervalued
+def send_undervalued(update, context):
+    print(f"User {update.effective_user.id} sent /undervalued")
     tickers = ["AAPL", "MSFT", "GOOG"]
     stocks = analyze_undervalued_stocks(tickers)
     if stocks:
@@ -30,25 +39,15 @@ def undervalued(update, context):
     else:
         context.bot.send_message(chat_id=update.effective_chat.id, text="Нет недооценённых акций.")
 
+# Регистрируем команды
 dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("news", news))
-dispatcher.add_handler(CommandHandler("undervalued", undervalued))
+dispatcher.add_handler(CommandHandler("news", send_news))
+dispatcher.add_handler(CommandHandler("undervalued", send_undervalued))
 
-def start(update, context):
-    print(f"User {update.effective_user.id} sent /start")
-    update.message.reply_text("Привет! Я бот для анализа новостей и недооцененных акций.")
-
-def send_news(update, context):
-    print(f"User {update.effective_user.id} sent /news")
-    ...
-
-def send_undervalued(update, context):
-    print(f"User {update.effective_user.id} sent /undervalued")
-
-# 🟢 ВАЖНО: запускаем Flask-сервер
+# Запускаем Flask-сервер для Render
 keep_alive()
 
-# 🟢 Запускаем Telegram-бота
+# Запускаем бота
 print("✅ Bot started and keep_alive active.")
 updater.start_polling()
 updater.idle()
