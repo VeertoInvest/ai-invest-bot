@@ -8,6 +8,36 @@ from telegram import Bot, Update
 from telegram.ext import Dispatcher, CommandHandler
 from news_handler import handle_news
 from undervalued_stocks import analyze_undervalued_stocks
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
+
+def tickers_command(update, context):
+    keyboard = [
+        [InlineKeyboardButton("AAPL", callback_data="news_AAPL"),
+         InlineKeyboardButton("MSFT", callback_data="news_MSFT")],
+        [InlineKeyboardButton("GOOGL", callback_data="news_GOOGL"),
+         InlineKeyboardButton("AMZN", callback_data="news_AMZN")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("Выберите тикер:", reply_markup=reply_markup)
+
+def button_callback(update, context):
+    query = update.callback_query
+    query.answer()
+
+    if query.data.startswith("news_"):
+        ticker = query.data.split("_")[1]
+        query.edit_message_text(f"🔍 Новости по {ticker}...")
+        articles = fetch_news_for_ticker(ticker)
+        if articles:
+            for article in articles:
+                context.bot.send_message(chat_id=query.message.chat.id, text=article)
+        else:
+            context.bot.send_message(chat_id=query.message.chat.id, text="❌ Новости не найдены.")
+
+dispatcher.add_handler(CommandHandler("tickers", tickers_command))
+dispatcher.add_handler(CallbackQueryHandler(button_callback))
+
 
 # 🔧 Логирование
 logging.basicConfig(level=logging.INFO)
