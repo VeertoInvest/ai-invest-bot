@@ -50,3 +50,11 @@ keep_alive()
 print("✅ Bot started and keep_alive active.")
 updater.start_polling()
 updater.idle()
+
+try:
+    print("✅ Starting bot polling...")
+    updater.start_polling()
+    updater.idle()
+except Exception as e:
+    print(f"❌ Error starting bot: {e}")
+
