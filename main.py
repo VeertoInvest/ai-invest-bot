@@ -5,19 +5,16 @@ from telegram.ext import Dispatcher, CommandHandler
 from news_handler import handle_news
 from undervalued_stocks import analyze_undervalued_stocks
 
-# Настройки
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
-if not TELEGRAM_API_KEY:
-    raise ValueError("❌ TELEGRAM_API_KEY not set")
-
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Например: https://ai-invest-bot.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 10000))
 
-bot = Bot(token=TELEGRAM_API_KEY)
+if not TELEGRAM_API_KEY or not WEBHOOK_URL:
+    raise ValueError("❌ TELEGRAM_API_KEY или WEBHOOK_URL не установлены в переменных окружения.")
 
-# Flask-приложение
+bot = Bot(token=TELEGRAM_API_KEY)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+dispatcher = Dispatcher(bot, update_queue=None, workers=1, use_context=True)
 
 # Команды
 def start(update, context):
@@ -30,34 +27,38 @@ def news(update, context):
 
 def undervalued(update, context):
     tickers = ["AAPL", "MSFT", "GOOG"]
-    results = analyze_undervalued_stocks(tickers)
-    if results:
-        for stock, pe in results:
+    stocks = analyze_undervalued_stocks(tickers)
+    if stocks:
+        for stock, pe in stocks:
             context.bot.send_message(chat_id=update.effective_chat.id, text=f"{stock} с P/E {pe}")
     else:
         context.bot.send_message(chat_id=update.effective_chat.id, text="Нет недооценённых акций.")
 
-# Регистрация команд
+# Регистрация
 dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("news", news))
 dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
-# Обработка запроса от Telegram
+# Webhook обработчик
 @app.route(f"/{TELEGRAM_API_KEY}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return "OK"
+    return "OK", 200
 
-# Установка Webhook при запуске
-@app.before_first_request
-def init_webhook():
-    full_url = f"{WEBHOOK_URL}/{TELEGRAM_API_KEY}"
+# Главная страница для Render ping
+@app.route("/", methods=["GET"])
+def index():
+    return "🟢 Telegram Webhook Bot активен", 200
+
+# Установка webhook в момент запуска приложения
+def set_webhook():
+    url = f"{WEBHOOK_URL}/{TELEGRAM_API_KEY}"
     bot.delete_webhook()
-    bot.set_webhook(url=full_url)
-    print(f"✅ Webhook установлен: {full_url}")
+    success = bot.set_webhook(url=url)
+    print(f"✅ Webhook {'успешно установлен' if success else 'не удалось установить'}: {url}")
 
-# Запуск сервера
 if __name__ == "__main__":
-    print(f"🌐 Запуск Flask на порту {PORT}")
+    set_webhook()
+    print(f"🚀 Flask-сервер запускается на порту {PORT}")
     app.run(host="0.0.0.0", port=PORT)
