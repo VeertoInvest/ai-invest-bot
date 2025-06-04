@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.INFO)
 import os
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler
