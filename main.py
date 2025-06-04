@@ -46,15 +46,16 @@ dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("news", news))
 dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
-# Запуск keep_alive (Flask-сервер)
-keep_alive()
-print("🌐 keep_alive (Flask) запущен.")
+import threading
 
-# Запуск Telegram-бота
+# Запускаем Flask-сервер для Render в отдельном потоке
+threading.Thread(target=keep_alive).start()
+print("🌐 keep_alive (Flask) запущен в фоне.")
+
+# Запускаем Telegram-бота
 try:
     print("✅ Starting bot polling...")
     updater.start_polling()
     updater.idle()
 except Exception as e:
     print(f"❌ Ошибка при запуске бота: {e}")
-
