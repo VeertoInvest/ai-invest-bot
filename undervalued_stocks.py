@@ -1,20 +1,14 @@
 import yfinance as yf
-import pandas as pd
 
-def analyze_undervalued_stocks():
-    tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META']
-    messages = []
-
+def find_undervalued_stocks(tickers):
+    undervalued = []
     for ticker in tickers:
         stock = yf.Ticker(ticker)
-        info = stock.info
-        pe_ratio = info.get("trailingPE", None)
-
-        if pe_ratio and pe_ratio < 20:
-            messages.append(f"{ticker}: P/E = {pe_ratio}")
-
-    if not messages:
-        return "Не найдено недооцененных акций."
-
-    return "📉 Недооцененные акции:
-" + "\n".join(messages)
+        try:
+            info = stock.info
+            pe_ratio = info.get("trailingPE", None)
+            if pe_ratio and pe_ratio < 15:
+                undervalued.append((ticker, pe_ratio))
+        except Exception as e:
+            print(f"Ошибка при обработке {ticker}: {e}")
+    return undervalued
