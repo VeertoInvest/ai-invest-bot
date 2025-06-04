@@ -1,6 +1,28 @@
 import requests
 import os
 
+import os
+import requests
+
+NEWS_API_KEY = os.getenv("NEWSAPI_KEY")
+
+def fetch_news_for_ticker(ticker):
+    url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={NEWS_API_KEY}&language=en&pageSize=5"
+    response = requests.get(url)
+    data = response.json()
+
+    if data.get("status") != "ok":
+        return []
+
+    articles = data.get("articles", [])
+    result = []
+    for art in articles:
+        title = art.get("title")
+        url = art.get("url")
+        result.append(f"{title}\n{url}")
+
+    return result
+
 def handle_news():
     api_key = os.getenv("NEWS_API_KEY")  # Обязательно должен быть в окружении
     if not api_key:
