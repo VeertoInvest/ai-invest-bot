@@ -34,6 +34,17 @@ dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("news", news))
 dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
+def start(update, context):
+    print(f"User {update.effective_user.id} sent /start")
+    update.message.reply_text("Привет! Я бот для анализа новостей и недооцененных акций.")
+
+def send_news(update, context):
+    print(f"User {update.effective_user.id} sent /news")
+    ...
+
+def send_undervalued(update, context):
+    print(f"User {update.effective_user.id} sent /undervalued")
+
 # 🟢 ВАЖНО: запускаем Flask-сервер
 keep_alive()
 
