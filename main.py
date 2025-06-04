@@ -1,44 +1,38 @@
-import logging
-logging.basicConfig(level=logging.INFO)
 import os
-from telegram import Bot
-from telegram.ext import Updater, CommandHandler
-from keep_alive import keep_alive
+from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler
 from news_handler import handle_news
 from undervalued_stocks import analyze_undervalued_stocks
 
-# Получаем ключ API из переменной окружения
+# Настройки
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
-
-# Проверка наличия ключа
 if not TELEGRAM_API_KEY:
-    raise ValueError("❌ TELEGRAM_API_KEY is not set in environment variables")
-else:
-    print(f"🔐 TELEGRAM_API_KEY loaded (начало ключа): {TELEGRAM_API_KEY[:5]}...")
+    raise ValueError("❌ TELEGRAM_API_KEY not set")
 
-# Настройка Telegram-бота
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Например: https://ai-invest-bot.onrender.com
+PORT = int(os.environ.get("PORT", 10000))
+
 bot = Bot(token=TELEGRAM_API_KEY)
-updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
-dispatcher = updater.dispatcher
 
-# Обработчики команд
+# Flask-приложение
+app = Flask(__name__)
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+
+# Команды
 def start(update, context):
-    print(f"✅ User {update.effective_user.id} sent /start")
-    context.bot.send_message(chat_id=update.effective_chat.id,
-                             text="Привет! Я бот для анализа новостей и недооценённых акций.")
+    context.bot.send_message(chat_id=update.effective_chat.id, text="🤖 Бот активен. Используй /news или /undervalued")
 
 def news(update, context):
-    print(f"📰 User {update.effective_user.id} sent /news")
     articles = handle_news()
     for article in articles:
         context.bot.send_message(chat_id=update.effective_chat.id, text=article)
 
 def undervalued(update, context):
-    print(f"📉 User {update.effective_user.id} sent /undervalued")
     tickers = ["AAPL", "MSFT", "GOOG"]
-    stocks = analyze_undervalued_stocks(tickers)
-    if stocks:
-        for stock, pe in stocks:
+    results = analyze_undervalued_stocks(tickers)
+    if results:
+        for stock, pe in results:
             context.bot.send_message(chat_id=update.effective_chat.id, text=f"{stock} с P/E {pe}")
     else:
         context.bot.send_message(chat_id=update.effective_chat.id, text="Нет недооценённых акций.")
@@ -48,33 +42,22 @@ dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("news", news))
 dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
-import threading
+# Обработка запроса от Telegram
+@app.route(f"/{TELEGRAM_API_KEY}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "OK"
 
-# Запускаем Flask-сервер для Render в отдельном потоке
-threading.Thread(target=keep_alive).start()
-print("🌐 keep_alive (Flask) запущен в фоне.")
+# Установка Webhook при запуске
+@app.before_first_request
+def init_webhook():
+    full_url = f"{WEBHOOK_URL}/{TELEGRAM_API_KEY}"
+    bot.delete_webhook()
+    bot.set_webhook(url=full_url)
+    print(f"✅ Webhook установлен: {full_url}")
 
-import requests
-
-# Удаляем старый webhook, если он был установлен
-def clear_existing_webhook():
-    print("🔍 Проверка на наличие активного webhook...")
-    resp_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_API_KEY}/getWebhookInfo")
-    info = resp_info.json()
-    url = info.get("result", {}).get("url")
-    if url:
-        print(f"⚠️ Обнаружен активный webhook: {url} — удаляем...")
-        resp_delete = requests.get(f"https://api.telegram.org/bot{TELEGRAM_API_KEY}/deleteWebhook")
-        print(f"✅ Результат удаления: {resp_delete.json()}")
-    else:
-        print("✅ Webhook не установлен — всё чисто.")
-
-# Запускаем Telegram-бота
-try:
-    clear_existing_webhook()  # <<< ВАЖНО: сначала очищаем webhook
-    print("✅ Starting bot polling...")
-    updater.start_polling()
-    updater.idle()
-
-except Exception as e:
-    print(f"❌ Ошибка при запуске бота: {e}")
+# Запуск сервера
+if __name__ == "__main__":
+    print(f"🌐 Запуск Flask на порту {PORT}")
+    app.run(host="0.0.0.0", port=PORT)
