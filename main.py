@@ -8,28 +8,31 @@ from undervalued_stocks import analyze_undervalued_stocks
 # Получаем ключ API из переменной окружения
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 
-# Проверка: если токен не найден — не запускаемся
+# Проверка наличия ключа
 if not TELEGRAM_API_KEY:
-    raise ValueError("TELEGRAM_API_KEY is not set in environment variables")
+    raise ValueError("❌ TELEGRAM_API_KEY is not set in environment variables")
+else:
+    print(f"🔐 TELEGRAM_API_KEY loaded (начало ключа): {TELEGRAM_API_KEY[:5]}...")
 
-# Настройка бота
+# Настройка Telegram-бота
 bot = Bot(token=TELEGRAM_API_KEY)
 updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
 dispatcher = updater.dispatcher
 
 # Обработчики команд
 def start(update, context):
-    print(f"User {update.effective_user.id} sent /start")
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Я бот для анализа новостей и недооцененных акций.")
+    print(f"✅ User {update.effective_user.id} sent /start")
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text="Привет! Я бот для анализа новостей и недооценённых акций.")
 
 def news(update, context):
-    print(f"User {update.effective_user.id} sent /news")
+    print(f"📰 User {update.effective_user.id} sent /news")
     articles = handle_news()
     for article in articles:
         context.bot.send_message(chat_id=update.effective_chat.id, text=article)
 
 def undervalued(update, context):
-    print(f"User {update.effective_user.id} sent /undervalued")
+    print(f"📉 User {update.effective_user.id} sent /undervalued")
     tickers = ["AAPL", "MSFT", "GOOG"]
     stocks = analyze_undervalued_stocks(tickers)
     if stocks:
@@ -43,13 +46,14 @@ dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("news", news))
 dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 
-# Запускаем Flask-сервер для Render
+# Запуск keep_alive (Flask-сервер)
 keep_alive()
+print("🌐 keep_alive (Flask) запущен.")
 
-# Запуск бота с отловом ошибок
+# Запуск Telegram-бота
 try:
     print("✅ Starting bot polling...")
     updater.start_polling()
     updater.idle()
 except Exception as e:
-    print(f"❌ Error starting bot: {e}")
+    print(f"❌ Ошибка при запуске бота: {e}")
