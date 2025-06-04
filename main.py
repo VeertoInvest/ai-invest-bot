@@ -24,6 +24,25 @@ dispatcher = Dispatcher(bot=bot, update_queue=None, workers=1, use_context=True)
 # 📌 Переменная для хранения chat_id
 last_chat_id = None
 
+from news_handler import fetch_news_for_ticker  # добавим эту функцию
+
+def news_command(update, context):
+    user_input = context.args
+    if not user_input:
+        update.message.reply_text("Введите тикер, например: /news AAPL")
+        return
+
+    ticker = user_input[0].upper()
+    update.message.reply_text(f"🔍 Ищу новости по {ticker}...")
+
+    articles = fetch_news_for_ticker(ticker)
+    if not articles:
+        update.message.reply_text("❌ Новости не найдены.")
+        return
+
+    for article in articles:
+        update.message.reply_text(article)
+
 # 📍 Команда /start
 def start(update, context):
     global last_chat_id
