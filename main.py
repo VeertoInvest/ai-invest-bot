@@ -57,3 +57,4 @@ try:
     updater.idle()
 except Exception as e:
     print(f"❌ Ошибка при запуске бота: {e}")
+
