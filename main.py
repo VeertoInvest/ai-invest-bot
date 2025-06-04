@@ -1,56 +1,50 @@
 import os
-import sys
 import logging
-from telegram import Bot
+import pytz
+import schedule
+import time
 from apscheduler.schedulers.background import BackgroundScheduler
+from telegram.ext import Updater, CommandHandler
 from flask import Flask
-import threading
-
-import pytz  # вверху файла, если ещё нет
-
-scheduler.add_job(scheduled_job, 'interval', hours=4, timezone=pytz.utc)
-
+from tasks.news_handler import fetch_and_analyze_news
+from tasks.undervalued_stocks import send_weekly_undervalued_stocks
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Подгружаем ключи из переменных окружения
-TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+# Получение API ключей из переменных окружения
+TELEGRAM_API_KEY = os.environ.get("TELEGRAM_API_KEY")
 
-# Проверка обязательных переменных
-missing_keys = []
-if not TELEGRAM_API_KEY: missing_keys.append("TELEGRAM_API_KEY")
-if not OPENAI_API_KEY: missing_keys.append("OPENAI_API_KEY")
-if not NEWS_API_KEY: missing_keys.append("NEWS_API_KEY")
+# Проверка наличия ключа
+if not TELEGRAM_API_KEY:
+    raise ValueError("TELEGRAM_API_KEY не установлен в переменных окружения")
 
-if missing_keys:
-    logger.error(f"❌ Missing environment variables: {', '.join(missing_keys)}")
-    sys.exit(1)
+# Создание бота
+updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
+dispatcher = updater.dispatcher
 
-bot = Bot(token=TELEGRAM_API_KEY)
+# Команды Telegram
+def start(update, context):
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Бот запущен!")
 
-def scheduled_job():
-    logger.info("📬 Выполняется задача: анализ и отправка данных.")
-    # Тут вставь логику отправки новостей
+start_handler = CommandHandler('start', start)
+dispatcher.add_handler(start_handler)
 
-# Планировщик задач
+# Планировщик для периодических задач
 scheduler = BackgroundScheduler()
-scheduler.add_job(scheduled_job, 'interval', hours=4)
+scheduler.add_job(fetch_and_analyze_news, 'interval', hours=4, timezone=pytz.utc)
+scheduler.add_job(send_weekly_undervalued_stocks, 'cron', day_of_week='sun', hour=12, timezone=pytz.utc)
 scheduler.start()
 
-# Flask keep-alive
+# Запуск Telegram-бота
+updater.start_polling()
+
+# Flask для Render.com (health check)
 app = Flask(__name__)
 
 @app.route('/')
-def home():
-    return "Bot is running"
+def index():
+    return "AI-Invest-Bot is running!"
 
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
-
-threading.Thread(target=run_flask).start()
-
-logger.info("✅ Bot started and keep_alive active.")
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
