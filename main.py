@@ -46,15 +46,10 @@ dispatcher.add_handler(CommandHandler("undervalued", undervalued))
 # Запускаем Flask-сервер для Render
 keep_alive()
 
-# Запускаем бота
-print("✅ Bot started and keep_alive active.")
-updater.start_polling()
-updater.idle()
-
+# Запуск бота с отловом ошибок
 try:
     print("✅ Starting bot polling...")
     updater.start_polling()
     updater.idle()
 except Exception as e:
     print(f"❌ Error starting bot: {e}")
-
