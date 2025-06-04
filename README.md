@@ -1,3 +1,3 @@
-# AI Invest Bot
+# AI Invest Bot (Render)
 
-Инвест-бот для Telegram с ИИ-анализом новостей и фундаментальной аналитикой.
+Запускается как Web Service с keep_alive HTTP-сервером для Render.
