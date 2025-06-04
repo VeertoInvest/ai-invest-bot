@@ -1,50 +1,45 @@
-import os
 import logging
+import os
 import pytz
-import schedule
-import time
-from apscheduler.schedulers.background import BackgroundScheduler
-from telegram.ext import Updater, CommandHandler
 from flask import Flask
-from tasks.news_handler import fetch_and_analyze_news
-from tasks.undervalued_stocks import send_weekly_undervalued_stocks
+from apscheduler.schedulers.background import BackgroundScheduler
+from telegram.ext import Updater
+
+from news_handler import handle_news
+from undervalued_stocks import find_undervalued_stocks
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Получение API ключей из переменных окружения
-TELEGRAM_API_KEY = os.environ.get("TELEGRAM_API_KEY")
+# Чтение токена из переменных окружения
+TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 
 # Проверка наличия ключа
 if not TELEGRAM_API_KEY:
-    raise ValueError("TELEGRAM_API_KEY не установлен в переменных окружения")
+    raise ValueError("TELEGRAM_API_KEY not found in environment variables")
 
-# Создание бота
+# Запуск Telegram-бота
 updater = Updater(token=TELEGRAM_API_KEY, use_context=True)
 dispatcher = updater.dispatcher
 
-# Команды Telegram
-def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Бот запущен!")
+# Планировщик задач
+def scheduled_job():
+    logging.info("🕒 Запуск плановой задачи: анализ новостей и акций")
+    handle_news()
+    find_undervalued_stocks()
 
-start_handler = CommandHandler('start', start)
-dispatcher.add_handler(start_handler)
-
-# Планировщик для периодических задач
-scheduler = BackgroundScheduler()
-scheduler.add_job(fetch_and_analyze_news, 'interval', hours=4, timezone=pytz.utc)
-scheduler.add_job(send_weekly_undervalued_stocks, 'cron', day_of_week='sun', hour=12, timezone=pytz.utc)
+scheduler = BackgroundScheduler(timezone=pytz.utc)
+scheduler.add_job(scheduled_job, 'interval', hours=4)
 scheduler.start()
 
-# Запуск Telegram-бота
-updater.start_polling()
-
-# Flask для Render.com (health check)
+# Flask-приложение для Render ping
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "AI-Invest-Bot is running!"
+    return "✅ Бот работает!"
 
-if __name__ == "__main__":
+# Запуск бота
+if __name__ == '__main__':
+    updater.start_polling()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
