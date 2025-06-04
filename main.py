@@ -6,6 +6,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 import threading
 
+import pytz
+scheduler = BackgroundScheduler()
+scheduler.add_job(scheduled_job, 'interval', hours=4, timezone=pytz.utc)
+scheduler.start()
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
