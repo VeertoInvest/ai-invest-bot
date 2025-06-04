@@ -54,10 +54,27 @@ import threading
 threading.Thread(target=keep_alive).start()
 print("🌐 keep_alive (Flask) запущен в фоне.")
 
+import requests
+
+# Удаляем старый webhook, если он был установлен
+def clear_existing_webhook():
+    print("🔍 Проверка на наличие активного webhook...")
+    resp_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_API_KEY}/getWebhookInfo")
+    info = resp_info.json()
+    url = info.get("result", {}).get("url")
+    if url:
+        print(f"⚠️ Обнаружен активный webhook: {url} — удаляем...")
+        resp_delete = requests.get(f"https://api.telegram.org/bot{TELEGRAM_API_KEY}/deleteWebhook")
+        print(f"✅ Результат удаления: {resp_delete.json()}")
+    else:
+        print("✅ Webhook не установлен — всё чисто.")
+
 # Запускаем Telegram-бота
 try:
+    clear_existing_webhook()  # <<< ВАЖНО: сначала очищаем webhook
     print("✅ Starting bot polling...")
     updater.start_polling()
     updater.idle()
+
 except Exception as e:
     print(f"❌ Ошибка при запуске бота: {e}")
