@@ -26,23 +26,16 @@ def fetch_news_for_ticker(ticker, limit=3):
     return articles
 
 def ai_analyze_news(article):
-    prompt = (
-        f"Проанализируй новость об акции компании:\n\n"
-        f"Заголовок: {article['title']}\n"
-        f"Описание: {article['description']}\n\n"
-        f"1. Определи тональность (позитив / нейтрально / негативно).\n"
-        f"2. Определи тип новости (финансовая, продуктовая, корпоративная и т.д.).\n"
-        f"3. Оцени силу воздействия (сильное / среднее / слабое).\n"
-        f"4. Сделай краткую инвестиционную рекомендацию (купить / держать / продать)."
-    )
-
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
+        prompt = f"Проанализируй новость и выдай краткий вывод: {article['title']}\n{article['description']}"
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.5,
+            max_tokens=200,
+            temperature=0.7,
         )
-        return response.choices[0].message.content.strip()
+        return response['choices'][0]['message']['content']
     except Exception as e:
-        return f"Ошибка анализа AI: {e}"
+        print(f"❌ Ошибка анализа новости: {e}")
+        return "Не удалось получить анализ новости."
+
