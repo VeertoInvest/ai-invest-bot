@@ -83,15 +83,3 @@ def ai_analyze_news(article):
     except Exception as e:
         print(f"❌ Ошибка AI-анализа: {e}")
         return "❌ Не удалось получить анализ новости."
-
-print(f"📨 Отправляем запрос в OpenAI...")
-
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=[{"role": "user", "content": prompt}],
-    temperature=0.7,
-    max_tokens=500,
-)
-
-print(f"✅ Ответ получен от OpenAI: {response}")
-
