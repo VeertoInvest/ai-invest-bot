@@ -31,7 +31,7 @@ def index():
     return "Бот работает"
 
 def start(update: Update, context: CallbackContext):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Отправь /analyze <тикер>, чтобы получить новости и анализ.")
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Отправь / <тикер>, чтобы получить новости и анализ.")
 
 def analyze(update: Update, context: CallbackContext):
     if not context.args:
