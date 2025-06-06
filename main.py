@@ -1,6 +1,7 @@
 import os
 import logging
 import pytz
+import openai
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Dispatcher, CommandHandler, CallbackContext, CallbackQueryHandler
@@ -12,6 +13,8 @@ from memory import add_favorite_ticker, remove_favorite_ticker, get_favorites
 TOKEN = os.getenv("TELEGRAM_API_KEY")
 HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 PORT = int(os.environ.get("PORT", 10000))
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
