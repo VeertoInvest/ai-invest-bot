@@ -3,12 +3,13 @@ import requests
 import openai
 from datetime import datetime, timedelta
 
-# API-ключи из переменных окружения
+# API-ключи
 NEWS_API_KEY = os.getenv("NEWS_API_KEY") or os.getenv("NEWSAPI_KEY")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def fetch_news_for_ticker(ticker, max_articles=3):
     if not NEWS_API_KEY:
+        print("❌ NEWS_API_KEY не задан.")
         return []
 
     url = "https://newsapi.org/v2/everything"
@@ -27,6 +28,7 @@ def fetch_news_for_ticker(ticker, max_articles=3):
         data = response.json()
 
         if data.get("status") != "ok":
+            print(f"❌ Ошибка от NewsAPI: {data}")
             return []
 
         return data.get("articles", [])
@@ -36,8 +38,11 @@ def fetch_news_for_ticker(ticker, max_articles=3):
 
 def ai_analyze_news(article):
     try:
-        content = article.get("title", "") + "\n\n" + article.get("description", "")
-        if not content.strip():
+        title = article.get("title", "")
+        description = article.get("description", "")
+        content = f"{title}\n\n{description}".strip()
+
+        if not content:
             return "⚠️ Недостаточно данных для анализа."
 
         prompt = (
@@ -57,10 +62,8 @@ def ai_analyze_news(article):
             max_tokens=300
         )
 
-        analysis = response['choices'][0]['message']['content']
-        return analysis.strip()
+        return response['choices'][0]['message']['content'].strip()
 
     except Exception as e:
         print(f"❌ Ошибка AI-анализа: {e}")
         return "❌ Не удалось получить анализ новости."
-
