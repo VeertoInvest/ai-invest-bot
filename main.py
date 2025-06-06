@@ -108,15 +108,6 @@ def index():
     return "бот работает"
 
 # Установка webhook при запуске
-@app.before_first_request
-def setup():
-    url = os.getenv("RENDER_EXTERNAL_URL") or "https://ai-invest-bot.onrender.com"
-    full_url = f"{url}/{TOKEN}"
-    bot.set_webhook(full_url)
-    print(f"✅ Webhook установлен: {full_url}")
-
-    scheduler.add_job(notify_undervalued, 'interval', hours=4)
-    scheduler.start()
 
 def notify_undervalued():
     try:
@@ -137,4 +128,15 @@ dispatcher.add_handler(CommandHandler("weekly", weekly))
 dispatcher.add_handler(CallbackQueryHandler(callback_handler))
 
 if __name__ == "__main__":
+    # Настройка webhook
+    url = os.getenv("RENDER_EXTERNAL_URL") or "https://ai-invest-bot.onrender.com"
+    full_url = f"{url}/{TOKEN}"
+    bot.set_webhook(full_url)
+    print(f"✅ Webhook установлен: {full_url}")
+
+    # Запуск планировщика
+    scheduler.add_job(notify_undervalued, 'interval', hours=4)
+    scheduler.start()
+
     app.run(port=10000)
+
