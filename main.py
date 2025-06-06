@@ -13,7 +13,6 @@ from memory import add_favorite_ticker, remove_favorite_ticker, get_favorites
 TOKEN = os.getenv("TELEGRAM_API_KEY")
 HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 PORT = int(os.environ.get("PORT", 10000))
-
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=TOKEN)
@@ -38,19 +37,25 @@ def analyze(update: Update, context: CallbackContext):
     if not context.args:
         update.message.reply_text("Укажите тикер: /analyze AAPL")
         return
+
     ticker = context.args[0].upper()
     articles = fetch_news_for_ticker(ticker)
-    for article in articles:
-    summary = ai_analyze_news(article)
-    context.bot.send_message(chat_id=chat_id, text=summary)
+
     if not articles:
         update.message.reply_text("Новости не найдены.")
         return
+
+    chat_id = update.effective_chat.id
     for article in articles[:3]:
-        analysis = ai_analyze_news(article)
-        text = f"📰 {article['title']}\n{article['url']}\n\n{analysis}"
-        context.bot.send_message(chat_id=update.effective_chat.id, text=text)
-    # добавить кнопку в избранное
+        try:
+            analysis = ai_analyze_news(article)
+            text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\n{analysis}"
+        except Exception as e:
+            logging.error(f"AI анализ не удался: {e}")
+            text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\nНе удалось получить анализ новости."
+
+        context.bot.send_message(chat_id=chat_id, text=text)
+
     keyboard = [[InlineKeyboardButton("Добавить в избранное", callback_data=f"add_{ticker}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text(f"Хотите получать новости по {ticker}?", reply_markup=reply_markup)
@@ -60,16 +65,17 @@ def handle_buttons(update: Update, context: CallbackContext):
     query.answer()
     user_id = str(query.from_user.id)
     data = query.data
+
     if data.startswith("add_"):
         ticker = data.split("_")[1]
         add_favorite_ticker(user_id, ticker)
-        query.edit_message_text(f"✅ {ticker} добавлен в избранное.")
+        query.edit_message_text(f"\u2705 {ticker} добавлен в избранное.")
 
 def favorites(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
     tickers = get_favorites(user_id)
     if tickers:
-        update.message.reply_text("⭐ Избранные тикеры: " + ", ".join(tickers))
+        update.message.reply_text("\u2B50 Избранные тикеры: " + ", ".join(tickers))
     else:
         update.message.reply_text("У вас нет избранных тикеров.")
 
@@ -80,22 +86,27 @@ def delete(update: Update, context: CallbackContext):
         return
     ticker = context.args[0].upper()
     remove_favorite_ticker(user_id, ticker)
-    update.message.reply_text(f"🗑 {ticker} удалён из избранного.")
+    update.message.reply_text(f"\U0001F5D1 {ticker} удалён из избранного.")
 
 def notify_news():
     for user_id, tickers in get_favorites().items():
         for ticker in tickers:
             articles = fetch_news_for_ticker(ticker)
             for article in articles[:1]:
-                analysis = ai_analyze_news(article)
-                text = f"📰 {article['title']}\n{article['url']}\n\n{analysis}"
+                try:
+                    analysis = ai_analyze_news(article)
+                    text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\n{analysis}"
+                except Exception as e:
+                    logging.error(f"AI анализ не удался: {e}")
+                    text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\nНе удалось получить анализ новости."
+
                 bot.send_message(chat_id=user_id, text=text)
 
 def notify_undervalued():
     results = weekly_undervalued_stocks_search()
     for user_id in get_favorites():
         if results:
-            bot.send_message(chat_id=user_id, text="📉 Недооценённые акции недели:")
+            bot.send_message(chat_id=user_id, text="\U0001F4C9 Недооценённые акции недели:")
             for stock in results:
                 bot.send_message(chat_id=user_id, text=stock)
         else:
@@ -114,5 +125,5 @@ dispatcher.add_handler(CallbackQueryHandler(handle_buttons))
 
 if __name__ == "__main__":
     bot.set_webhook(url=f"https://{HOST}/{TOKEN}")
-    logging.info(f"✅ Webhook установлен: https://{HOST}/{TOKEN}")
+    logging.info(f"\u2705 Webhook установлен: https://{HOST}/{TOKEN}")
     app.run(host="0.0.0.0", port=PORT)
