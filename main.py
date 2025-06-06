@@ -1,199 +1,156 @@
-import os
 import logging
+import os
+import json
+import requests
+import threading
+from datetime import datetime
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Dispatcher, CommandHandler, CallbackContext, CallbackQueryHandler
-from news_handler import handle_news, fetch_news_for_ticker
-from undervalued_stocks import analyze_undervalued_stocks
-from ai_news_analysis import analyze_news_sentiment
+from telegram.ext import Dispatcher, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
+from apscheduler.schedulers.background import BackgroundScheduler
+from openai import OpenAI
+from news_handler import handle_news, ai_analyze_news
+from undervalued_stocks import analyze_undervalued_stocks_by_indicators
 
-app = Flask(__name__)
+# --- ЛОГГИРОВАНИЕ ---
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 PORT = int(os.getenv("PORT", 10000))
 
 if not TELEGRAM_API_KEY or not RENDER_EXTERNAL_HOSTNAME:
-    raise ValueError("Не заданы переменные TELEGRAM_API_KEY и RENDER_EXTERNAL_HOSTNAME")
+    raise ValueError("❌ Обязательно укажите TELEGRAM_API_KEY и RENDER_EXTERNAL_HOSTNAME в .env")
 
+# --- ИНИЦИАЛИЗАЦИЯ ---
+app = Flask(__name__)
 bot = Bot(token=TELEGRAM_API_KEY)
-dispatcher = Dispatcher(bot, update_queue=None, workers=4, use_context=True)
+dispatcher = Dispatcher(bot, None, workers=1, use_context=True)
+favorites = {}  # Память: {user_id: [tickers]}
 
-user_favorites = {}
-
-# Команда /start
+# --- КОМАНДЫ ---
 def start(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
     keyboard = [
-        [InlineKeyboardButton("Новости", callback_data='news')],
-        [InlineKeyboardButton("Недооценённые акции", callback_data='undervalued')],
-        [InlineKeyboardButton("Мои тикеры", callback_data='favorites')]
+        [InlineKeyboardButton("📰 Новости", callback_data="news")],
+        [InlineKeyboardButton("📌 Добавить тикер", callback_data="add")],
+        [InlineKeyboardButton("❌ Удалить тикер", callback_data="remove")],
+        [InlineKeyboardButton("⭐ Избранное", callback_data="favorites")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Привет! Выберите действие:", reply_markup=reply_markup)
+    update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
-# Обработка кнопок
-
-def button_handler(update: Update, context: CallbackContext):
+def handle_callback(update: Update, context: CallbackContext):
     query = update.callback_query
+    user_id = query.from_user.id
     query.answer()
 
     if query.data == "news":
-        query.edit_message_text("Введите тикер (например: AAPL)")
-        context.user_data["expecting_ticker"] = "news"
-    elif query.data == "undervalued":
-        tickers = ["AAPL", "MSFT", "GOOG"]
-        results = analyze_undervalued_stocks(tickers)
-        text = "\n".join([f"{t[0]} с P/E {t[1]}" for t in results]) or "Нет недооценённых акций."
-        query.edit_message_text(text)
+        tickers = favorites.get(user_id, [])
+        if not tickers:
+            query.edit_message_text("У вас нет тикеров. Добавьте сначала.")
+            return
+        for ticker in tickers:
+            send_news_analysis(user_id, ticker)
+
+    elif query.data == "add":
+        context.bot.send_message(chat_id=query.message.chat_id, text="Введите тикер для добавления в избранное:")
+        context.user_data['awaiting_add'] = True
+
+    elif query.data == "remove":
+        user_favs = favorites.get(user_id, [])
+        if not user_favs:
+            context.bot.send_message(chat_id=query.message.chat_id, text="Список пуст.")
+            return
+        keyboard = [[InlineKeyboardButton(t, callback_data=f"remove_{t}")] for t in user_favs]
+        context.bot.send_message(chat_id=query.message.chat_id, text="Выберите тикер для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif query.data == "favorites":
-        user_id = query.from_user.id
-        favs = user_favorites.get(user_id, [])
-        text = "\n".join(favs) or "Нет любимых тикеров."
-        query.edit_message_text(f"Ваши любимые тикеры:\n{text}")
+        favs = favorites.get(user_id, [])
+        if favs:
+            context.bot.send_message(chat_id=query.message.chat_id, text="⭐ Ваши тикеры: " + ", ".join(favs))
+        else:
+            context.bot.send_message(chat_id=query.message.chat_id, text="Список избранного пуст.")
 
-# Команда /favorites
+    elif query.data.startswith("remove_"):
+        ticker = query.data.replace("remove_", "")
+        favorites[user_id].remove(ticker)
+        context.bot.send_message(chat_id=query.message.chat_id, text=f"Удалён: {ticker}")
 
-def favorites_command(update: Update, context: CallbackContext):
+
+def text_handler(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    favs = user_favorites.get(user_id, [])
-    text = "\n".join(favs) or "Нет любимых тикеров. Добавьте их, введя тикер."
-    update.message.reply_text(f"Ваши любимые тикеры:\n{text}")
+    text = update.message.text.upper()
 
-# Обработка сообщений
+    if context.user_data.get('awaiting_add'):
+        context.user_data['awaiting_add'] = False
+        favorites.setdefault(user_id, []).append(text)
+        update.message.reply_text(f"✅ {text} добавлен в избранное.")
+    else:
+        send_news_analysis(user_id, text)
 
-def handle_message(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    text = update.message.text.strip().upper()
-
-    if context.user_data.get("expecting_ticker") == "news":
-        news_list = fetch_news_for_ticker(text)
-        if not news_list:
-            update.message.reply_text("Не найдено новостей по тикеру.")
+# --- АНАЛИЗ НОВОСТЕЙ ---
+def send_news_analysis(user_id: int, ticker: str):
+    try:
+        raw_news = handle_news(ticker)
+        if not raw_news:
+            bot.send_message(chat_id=user_id, text=f"Нет новостей по {ticker}")
             return
 
-        user_favorites.setdefault(user_id, []).append(text)
-        update.message.reply_text(f"Тикер {text} добавлен в любимые. Анализирую новости...")
+        for news in raw_news[:3]:
+            summary, tone, category, impact, recommendation, historical_reaction = ai_analyze_news(news, ticker)
+            bot.send_message(chat_id=user_id, text=f"📰 {news['title']}\n\n💬 {summary}\n📊 Категория: {category}\n🎭 Тон: {tone}\n🔥 Влияние: {impact}\n📈 Реакция в прошлом: {historical_reaction}\n💡 Рекомендация: {recommendation}")
+    except Exception as e:
+        logger.error(f"Ошибка анализа: {e}")
+        bot.send_message(chat_id=user_id, text="Произошла ошибка при анализе новостей.")
 
-        for article in news_list[:3]:
-            title = article.get("title", "")
-            analysis = analyze_news_sentiment(title)
-            summary = (
-                f"📰 {title}\n"
-                f"📈 Тип: {analysis['type']}\n"
-                f"😐 Тональность: {analysis['sentiment']}\n"
-                f"💥 Сила воздействия: {analysis['impact']}\n"
-                f"💬 Рекомендация: {analysis['recommendation']}\n"
-                f"📊 Прошлая реакция цены: {analysis['past_reaction']}"
-            )
-            update.message.reply_text(summary)
-        context.user_data["expecting_ticker"] = None
+# --- ЕЖЕНЕДЕЛЬНЫЙ АНАЛИЗ АКЦИЙ ---
+def send_weekly_undervalued():
+    try:
+        result = analyze_undervalued_stocks_by_indicators()
+        for user_id in favorites:
+            if result:
+                bot.send_message(chat_id=user_id, text="📉 Недооценённые акции на этой неделе:")
+                for stock in result:
+                    bot.send_message(chat_id=user_id, text=stock)
+            else:
+                bot.send_message(chat_id=user_id, text="На этой неделе подходящих акций не найдено.")
+    except Exception as e:
+        logger.error(f"Ошибка при еженедельном анализе акций: {e}")
 
-# Webhook обработчик
+# --- ПЕРИОДИЧЕСКИЕ УВЕДОМЛЕНИЯ ---
+def send_scheduled_news():
+    for user_id, tickers in favorites.items():
+        for ticker in tickers:
+            send_news_analysis(user_id, ticker)
 
+# --- WEBHOOK ---
 @app.route(f"/{TELEGRAM_API_KEY}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return "ok"
+    return "OK"
 
 @app.route("/")
-def index():
-    return "Бот работает"
+def home():
+    return "OK"
 
-# Регистрируем обработчики
-
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("favorites", favorites_command))
-dispatcher.add_handler(CallbackQueryHandler(button_handler))
-dispatcher.add_handler(CommandHandler("help", start))
-dispatcher.add_handler(CommandHandler("news", lambda u, c: u.message.reply_text("Введите тикер.")))
-dispatcher.add_handler(CommandHandler("undervalued", lambda u, c: u.message.reply_text("Используйте кнопки или введите /start")))
-dispatcher.add_handler(CommandHandler("ticker", handle_message))
-dispatcher.add_handler(CommandHandler("add", handle_message))
-dispatcher.add_handler(CommandHandler("analyze", handle_message))
-dispatcher.add_handler(CommandHandler("tickernews", handle_message))
-dispatcher.add_handler(CommandHandler("summary", handle_message))
-dispatcher.add_handler(CommandHandler("analyze_news", handle_message))
-dispatcher.add_handler(CommandHandler("stock", handle_message))
-dispatcher.add_handler(CommandHandler("stock_news", handle_message))
-dispatcher.add_handler(CommandHandler("analyze_ticker", handle_message))
-dispatcher.add_handler(CommandHandler("check", handle_message))
-dispatcher.add_handler(CommandHandler("check_news", handle_message))
-dispatcher.add_handler(CommandHandler("get_news", handle_message))
-dispatcher.add_handler(CommandHandler("recommend", handle_message))
-dispatcher.add_handler(CommandHandler("recommendation", handle_message))
-dispatcher.add_handler(CommandHandler("reaction", handle_message))
-dispatcher.add_handler(CommandHandler("reaction_price", handle_message))
-dispatcher.add_handler(CommandHandler("summary_news", handle_message))
-dispatcher.add_handler(CommandHandler("full_analysis", handle_message))
-dispatcher.add_handler(CommandHandler("price_reaction", handle_message))
-dispatcher.add_handler(CommandHandler("ticker_summary", handle_message))
-dispatcher.add_handler(CommandHandler("sentiment", handle_message))
-dispatcher.add_handler(CommandHandler("sentiment_analysis", handle_message))
-dispatcher.add_handler(CommandHandler("impact", handle_message))
-dispatcher.add_handler(CommandHandler("impact_analysis", handle_message))
-dispatcher.add_handler(CommandHandler("type", handle_message))
-dispatcher.add_handler(CommandHandler("news_type", handle_message))
-dispatcher.add_handler(CommandHandler("ticker_type", handle_message))
-dispatcher.add_handler(CommandHandler("analyze_type", handle_message))
-dispatcher.add_handler(CommandHandler("ticker_impact", handle_message))
-dispatcher.add_handler(CommandHandler("ticker_sentiment", handle_message))
-dispatcher.add_handler(CommandHandler("ticker_recommend", handle_message))
-dispatcher.add_handler(CommandHandler("favorite", favorites_command))
-dispatcher.add_handler(CommandHandler("add_favorite", handle_message))
-dispatcher.add_handler(CommandHandler("remove_favorite", handle_message))
-dispatcher.add_handler(CommandHandler("clear_favorites", handle_message))
-dispatcher.add_handler(CommandHandler("save_ticker", handle_message))
-dispatcher.add_handler(CommandHandler("load_favorites", favorites_command))
-dispatcher.add_handler(CommandHandler("list_favorites", favorites_command))
-dispatcher.add_handler(CommandHandler("my_tickers", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_tickers", favorites_command))
-dispatcher.add_handler(CommandHandler("saved", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers", favorites_command))
-dispatcher.add_handler(CommandHandler("get_favorites", favorites_command))
-dispatcher.add_handler(CommandHandler("fav", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_list", favorites_command))
-dispatcher.add_handler(CommandHandler("show_tickers", favorites_command))
-dispatcher.add_handler(CommandHandler("favorite_list", favorites_command))
-dispatcher.add_handler(CommandHandler("ticker_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_list", favorites_command))
-dispatcher.add_handler(CommandHandler("show_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("ticker_favorites", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_favorites", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_saved", favorites_command))
-dispatcher.add_handler(CommandHandler("favorite_saved", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_saved", favorites_command))
-dispatcher.add_handler(CommandHandler("favs", favorites_command))
-dispatcher.add_handler(CommandHandler("ticker_fav", favorites_command))
-dispatcher.add_handler(CommandHandler("favorite_ticker", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_fav", favorites_command))
-dispatcher.add_handler(CommandHandler("favs_list", favorites_command))
-dispatcher.add_handler(CommandHandler("saved_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_stocks", favorites_command))
-dispatcher.add_handler(CommandHandler("stocks_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("list_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("favs_saved", favorites_command))
-dispatcher.add_handler(CommandHandler("stock_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("favorites_list", favorites_command))
-dispatcher.add_handler(CommandHandler("all_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_all", favorites_command))
-dispatcher.add_handler(CommandHandler("favorites_all", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_show", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_ticker_list", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_stocks_list", favorites_command))
-dispatcher.add_handler(CommandHandler("tickers_favorites_list", favorites_command))
-dispatcher.add_handler(CommandHandler("list_ticker_favs", favorites_command))
-dispatcher.add_handler(CommandHandler("ticker_favorites_list", favorites_command))
-dispatcher.add_handler(CommandHandler("all_favorite_tickers", favorites_command))
-dispatcher.add_handler(CommandHandler("ticker_fav_list", favorites_command))
-dispatcher.add_handler(CommandHandler("stock_fav_list", favorites_command))
-dispatcher.add_handler(CommandHandler("fav_stock_list", favorites_command))
-dispatcher.add_handler(CommandHandler("my_favs", favorites_command))
-
-if __name__ == "__main__":
+# --- ЗАПУСК ---
+if __name__ == '__main__':
+    bot.delete_webhook()
     webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_API_KEY}"
-    bot.set_webhook(url=webhook_url)
-    logging.info(f"✅ Webhook установлен: {webhook_url}")
-    app.run(host="0.0.0.0", port=PORT)
+    bot.set_webhook(webhook_url)
+    logger.info(f"✅ Webhook установлен: {webhook_url}")
+
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CallbackQueryHandler(handle_callback))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(send_scheduled_news, 'interval', hours=4)
+    scheduler.add_job(send_weekly_undervalued, 'cron', day_of_week='mon', hour=10)
+    scheduler.start()
+
+    app.run(host='0.0.0.0', port=PORT)
