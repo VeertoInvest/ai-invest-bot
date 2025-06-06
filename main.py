@@ -1,156 +1,137 @@
-import logging
 import os
-import json
+import logging
 import requests
+import schedule
+import time
 import threading
-from datetime import datetime
+
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Dispatcher, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
-from apscheduler.schedulers.background import BackgroundScheduler
-from openai import OpenAI
-from news_handler import handle_news, ai_analyze_news
-from undervalued_stocks import analyze_undervalued_stocks_by_indicators
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 
-# --- ЛОГГИРОВАНИЕ ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from news_handler import fetch_news_for_ticker, ai_analyze_news
+from undervalued_stocks import weekly_undervalued_stocks_search
+from memory import add_favorite, remove_favorite, get_favorites
 
-# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
 TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-PORT = int(os.getenv("PORT", 10000))
+PORT = int(os.environ.get("PORT", 10000))
 
 if not TELEGRAM_API_KEY or not RENDER_EXTERNAL_HOSTNAME:
-    raise ValueError("❌ Обязательно укажите TELEGRAM_API_KEY и RENDER_EXTERNAL_HOSTNAME в .env")
+    raise ValueError("❌ Не заданы TELEGRAM_API_KEY или RENDER_EXTERNAL_HOSTNAME")
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
-app = Flask(__name__)
 bot = Bot(token=TELEGRAM_API_KEY)
-dispatcher = Dispatcher(bot, None, workers=1, use_context=True)
-favorites = {}  # Память: {user_id: [tickers]}
+dispatcher = Dispatcher(bot, None, workers=4, use_context=True)
+app = Flask(__name__)
 
-# --- КОМАНДЫ ---
+# Команды
+
 def start(update: Update, context: CallbackContext):
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text="Привет! Я бот для AI-анализа новостей и поиска недооценённых акций.\n\nНапиши тикер или выбери из кнопок.")
+    send_ticker_buttons(update.effective_chat.id)
+
+def send_ticker_buttons(chat_id):
+    tickers = ["AAPL", "MSFT", "GOOG", "AMZN"]
+    buttons = [[InlineKeyboardButton(ticker, callback_data=f"analyze:{ticker}")] for ticker in tickers]
+    markup = InlineKeyboardMarkup(buttons)
+    bot.send_message(chat_id=chat_id, text="Выберите тикер:", reply_markup=markup)
+
+def handle_favorites(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    keyboard = [
-        [InlineKeyboardButton("📰 Новости", callback_data="news")],
-        [InlineKeyboardButton("📌 Добавить тикер", callback_data="add")],
-        [InlineKeyboardButton("❌ Удалить тикер", callback_data="remove")],
-        [InlineKeyboardButton("⭐ Избранное", callback_data="favorites")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
+    favs = get_favorites(user_id)
+    if favs:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Избранные тикеры: " + ", ".join(favs))
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="У вас нет избранных тикеров.")
+
+def handle_delete(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if len(context.args) != 1:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Используйте: /delete <тикер>")
+        return
+    remove_favorite(user_id, context.args[0])
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Удалено.")
+
+def handle_weekly(update: Update, context: CallbackContext):
+    stocks = weekly_undervalued_stocks_search()
+    if not stocks:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Недооценённых акций не найдено.")
+    for stock in stocks:
+        msg = f"📉 {stock['ticker']}\nMoS: {stock['mo_safety']}%\nP/E: {stock['pe']}\nPEG: {stock['peg']}\nROE: {stock['roe']}%\nD/E: {stock['de']}"
+        context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
+def handle_text(update: Update, context: CallbackContext):
+    ticker = update.message.text.strip().upper()
+    handle_ticker_analysis(update.effective_chat.id, update.effective_user.id, ticker)
 
 def handle_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    user_id = query.from_user.id
     query.answer()
+    if query.data.startswith("analyze:"):
+        ticker = query.data.split(":")[1]
+        handle_ticker_analysis(query.message.chat.id, query.from_user.id, ticker)
 
-    if query.data == "news":
-        tickers = favorites.get(user_id, [])
-        if not tickers:
-            query.edit_message_text("У вас нет тикеров. Добавьте сначала.")
-            return
+def handle_ticker_analysis(chat_id, user_id, ticker):
+    add_favorite(user_id, ticker)
+    bot.send_message(chat_id=chat_id, text=f"🔍 Ищу новости по {ticker}...")
+    articles = fetch_news_for_ticker(ticker)
+    if not articles:
+        bot.send_message(chat_id=chat_id, text="Новостей не найдено.")
+        return
+    for article in articles:
+        title = article.get("title", "")
+        url = article.get("url", "")
+        summary = ai_analyze_news(article)
+        message = f"🗞 {title}\n{url}\n\n🤖 AI-анализ:\n{summary}"
+        bot.send_message(chat_id=chat_id, text=message)
+
+# Автоуведомления каждые 4 часа
+
+def notify_users():
+    for user_id, tickers in get_favorites_all().items():
         for ticker in tickers:
-            send_news_analysis(user_id, ticker)
+            articles = fetch_news_for_ticker(ticker)
+            for article in articles[:1]:
+                summary = ai_analyze_news(article)
+                msg = f"🕒 Новость по {ticker}:\n{article['title']}\n{article['url']}\n\n🤖 {summary}"
+                bot.send_message(chat_id=user_id, text=msg)
 
-    elif query.data == "add":
-        context.bot.send_message(chat_id=query.message.chat_id, text="Введите тикер для добавления в избранное:")
-        context.user_data['awaiting_add'] = True
+def get_favorites_all():
+    from memory import user_favorites
+    return user_favorites
 
-    elif query.data == "remove":
-        user_favs = favorites.get(user_id, [])
-        if not user_favs:
-            context.bot.send_message(chat_id=query.message.chat_id, text="Список пуст.")
-            return
-        keyboard = [[InlineKeyboardButton(t, callback_data=f"remove_{t}")] for t in user_favs]
-        context.bot.send_message(chat_id=query.message.chat_id, text="Выберите тикер для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+def scheduler_thread():
+    schedule.every(4).hours.do(notify_users)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
 
-    elif query.data == "favorites":
-        favs = favorites.get(user_id, [])
-        if favs:
-            context.bot.send_message(chat_id=query.message.chat_id, text="⭐ Ваши тикеры: " + ", ".join(favs))
-        else:
-            context.bot.send_message(chat_id=query.message.chat_id, text="Список избранного пуст.")
-
-    elif query.data.startswith("remove_"):
-        ticker = query.data.replace("remove_", "")
-        favorites[user_id].remove(ticker)
-        context.bot.send_message(chat_id=query.message.chat_id, text=f"Удалён: {ticker}")
-
-
-def text_handler(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    text = update.message.text.upper()
-
-    if context.user_data.get('awaiting_add'):
-        context.user_data['awaiting_add'] = False
-        favorites.setdefault(user_id, []).append(text)
-        update.message.reply_text(f"✅ {text} добавлен в избранное.")
-    else:
-        send_news_analysis(user_id, text)
-
-# --- АНАЛИЗ НОВОСТЕЙ ---
-def send_news_analysis(user_id: int, ticker: str):
-    try:
-        raw_news = handle_news(ticker)
-        if not raw_news:
-            bot.send_message(chat_id=user_id, text=f"Нет новостей по {ticker}")
-            return
-
-        for news in raw_news[:3]:
-            summary, tone, category, impact, recommendation, historical_reaction = ai_analyze_news(news, ticker)
-            bot.send_message(chat_id=user_id, text=f"📰 {news['title']}\n\n💬 {summary}\n📊 Категория: {category}\n🎭 Тон: {tone}\n🔥 Влияние: {impact}\n📈 Реакция в прошлом: {historical_reaction}\n💡 Рекомендация: {recommendation}")
-    except Exception as e:
-        logger.error(f"Ошибка анализа: {e}")
-        bot.send_message(chat_id=user_id, text="Произошла ошибка при анализе новостей.")
-
-# --- ЕЖЕНЕДЕЛЬНЫЙ АНАЛИЗ АКЦИЙ ---
-def send_weekly_undervalued():
-    try:
-        result = analyze_undervalued_stocks_by_indicators()
-        for user_id in favorites:
-            if result:
-                bot.send_message(chat_id=user_id, text="📉 Недооценённые акции на этой неделе:")
-                for stock in result:
-                    bot.send_message(chat_id=user_id, text=stock)
-            else:
-                bot.send_message(chat_id=user_id, text="На этой неделе подходящих акций не найдено.")
-    except Exception as e:
-        logger.error(f"Ошибка при еженедельном анализе акций: {e}")
-
-# --- ПЕРИОДИЧЕСКИЕ УВЕДОМЛЕНИЯ ---
-def send_scheduled_news():
-    for user_id, tickers in favorites.items():
-        for ticker in tickers:
-            send_news_analysis(user_id, ticker)
-
-# --- WEBHOOK ---
+# Webhook и Flask
 @app.route(f"/{TELEGRAM_API_KEY}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return "OK"
+    return "ok"
 
 @app.route("/")
-def home():
-    return "OK"
+def index():
+    return "ok"
 
-# --- ЗАПУСК ---
-if __name__ == '__main__':
+# Регистрация команд
+
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("favorites", handle_favorites))
+dispatcher.add_handler(CommandHandler("delete", handle_delete))
+dispatcher.add_handler(CommandHandler("weekly", handle_weekly))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+dispatcher.add_handler(CallbackQueryHandler(handle_callback))
+
+# Запуск
+if __name__ == "__main__":
     bot.delete_webhook()
-    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_API_KEY}"
-    bot.set_webhook(webhook_url)
-    logger.info(f"✅ Webhook установлен: {webhook_url}")
-
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CallbackQueryHandler(handle_callback))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
-
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(send_scheduled_news, 'interval', hours=4)
-    scheduler.add_job(send_weekly_undervalued, 'cron', day_of_week='mon', hour=10)
-    scheduler.start()
-
-    app.run(host='0.0.0.0', port=PORT)
+    bot.set_webhook(url=f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_API_KEY}")
+    logging.basicConfig(level=logging.INFO)
+    logging.info(f"✅ Webhook установлен: https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_API_KEY}")
+    threading.Thread(target=scheduler_thread, daemon=True).start()
+    app.run(host="0.0.0.0", port=PORT)
