@@ -100,7 +100,7 @@ def notify_undervalued():
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(notify_news, 'interval', hours=4, timezone=pytz.utc)
-scheduler.add_job(notify_undervalued, 'cron', day_of_week='mon', hour=10)
+scheduler.add_job(notify_undervalued, 'cron', day_of_week='mon', hour=10, timezone=pytz.utc)
 scheduler.start()
 
 dispatcher.add_handler(CommandHandler("start", start))
