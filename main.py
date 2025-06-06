@@ -40,6 +40,9 @@ def analyze(update: Update, context: CallbackContext):
         return
     ticker = context.args[0].upper()
     articles = fetch_news_for_ticker(ticker)
+    for article in articles:
+    summary = ai_analyze_news(article)
+    context.bot.send_message(chat_id=chat_id, text=summary)
     if not articles:
         update.message.reply_text("Новости не найдены.")
         return
