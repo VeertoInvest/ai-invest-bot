@@ -1,24 +1,97 @@
 import os
 import logging
-import pytz
-import openai
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Dispatcher, CommandHandler, CallbackContext, CallbackQueryHandler
+from telegram.ext import Dispatcher, CommandHandler, CallbackQueryHandler
 from apscheduler.schedulers.background import BackgroundScheduler
+
 from news_handler import fetch_news_for_ticker, ai_analyze_news
 from undervalued_stocks import weekly_undervalued_stocks_search
-from memory import add_favorite_ticker, remove_favorite_ticker, get_favorites
+from memory import add_favorite_ticker, get_favorites
 
-TOKEN = os.getenv("TELEGRAM_API_KEY")
-HOST = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-PORT = int(os.environ.get("PORT", 10000))
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot=bot, update_queue=None, use_context=True)
+
 logging.basicConfig(level=logging.INFO)
+
+scheduler = BackgroundScheduler()
+
+def start(update, context):
+    if update.message:
+        update.message.reply_text("Привет! Отправь команду /analyze <тикер> для анализа новостей.")
+
+def analyze(update, context):
+    try:
+        if not context.args:
+            if update.message:
+                update.message.reply_text("Пожалуйста, укажите тикер. Пример: /analyze AAPL")
+            return
+
+        ticker = context.args[0].upper()
+        articles = fetch_news_for_ticker(ticker)
+
+        if not articles:
+            if update.message:
+                update.message.reply_text(f"❌ Не удалось найти новости по {ticker}.")
+            return
+
+        for article in articles:
+            analysis = ai_analyze_news(article)
+            text = f"📰 <b>{article.get('title')}</b>\n\n" \
+                   f"{article.get('description')}\n\n" \
+                   f"<i>{analysis}</i>\n\n" \
+                   f"🔗 {article.get('url')}"
+            if update.message:
+                update.message.reply_text(text, parse_mode="HTML")
+
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"➕ Добавить {ticker} в избранное", callback_data=f"add_fav_{ticker}")]
+        ])
+        if update.message:
+            update.message.reply_text(f"Хотите получать новости по {ticker}?", reply_markup=reply_markup)
+
+    except Exception as e:
+        logging.exception("Ошибка в analyze")
+        if update.message:
+            update.message.reply_text("Произошла ошибка при анализе.")
+
+def callback_handler(update, context):
+    query = update.callback_query
+    if not query:
+        return
+
+    query.answer()
+    data = query.data
+    if data.startswith("add_fav_"):
+        ticker = data.replace("add_fav_", "")
+        user_id = query.from_user.id
+        add_favorite_ticker(user_id, ticker)
+        query.edit_message_text(f"✅ {ticker} добавлен в избранное!")
+
+def favorites(update, context):
+    user_id = update.effective_user.id
+    favs = get_favorites(user_id)
+    if favs:
+        update.message.reply_text("📌 Ваши любимые тикеры:\n" + ", ".join(favs))
+    else:
+        update.message.reply_text("У вас пока нет любимых тикеров. Добавьте через /analyze.")
+
+def weekly(update, context):
+    try:
+        undervalued = weekly_undervalued_stocks_search()
+        if not undervalued:
+            update.message.reply_text("❌ Не удалось найти недооценённые акции.")
+            return
+
+        text = "📉 Недооценённые акции недели:\n\n"
+        for stock in undervalued:
+            text += f"{stock}\n"
+
+        update.message.reply_text(text)
+    except Exception as e:
+        logging.exception("Ошибка в weekly")
+        update.message.reply_text("Произошла ошибка при генерации отчёта.")
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
@@ -28,114 +101,37 @@ def webhook():
 
 @app.route("/")
 def index():
-    return "Бот работает"
+    return "бот работает"
 
-def start(update: Update, context: CallbackContext):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Привет! Отправь / <тикер>, чтобы получить новости и анализ.")
+# Установка webhook при запуске
+@app.before_first_request
+def setup():
+    url = os.getenv("RENDER_EXTERNAL_URL") or "https://ai-invest-bot.onrender.com"
+    full_url = f"{url}/{TOKEN}"
+    bot.set_webhook(full_url)
+    print(f"✅ Webhook установлен: {full_url}")
 
-def analyze(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Укажите тикер: /analyze AAPL")
-        return
-
-    ticker = context.args[0].upper()
-    articles = fetch_news_for_ticker(ticker)
-
-    if not articles:
-        update.message.reply_text("Новости не найдены.")
-        return
-
-    chat_id = update.effective_chat.id
-    for article in articles[:3]:
-        try:
-            analysis = ai_analyze_news(article)
-            text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\n{analysis}"
-        except Exception as e:
-            logging.error(f"AI анализ не удался: {e}")
-            text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\nНе удалось получить анализ новости."
-
-        context.bot.send_message(chat_id=chat_id, text=text)
-
-    keyboard = [[InlineKeyboardButton("Добавить в избранное", callback_data=f"add_{ticker}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(f"Хотите получать новости по {ticker}?", reply_markup=reply_markup)
-
-def handle_buttons(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    user_id = str(query.from_user.id)
-    data = query.data
-
-    if data.startswith("add_"):
-        ticker = data.split("_")[1]
-        add_favorite_ticker(user_id, ticker)
-        query.edit_message_text(f"\u2705 {ticker} добавлен в избранное.")
-
-def favorites(update: Update, context: CallbackContext):
-    user_id = str(update.effective_user.id)
-    tickers = get_favorites(user_id)
-    if tickers:
-        update.message.reply_text("\u2B50 Избранные тикеры: " + ", ".join(tickers))
-    else:
-        update.message.reply_text("У вас нет избранных тикеров.")
-
-def delete(update: Update, context: CallbackContext):
-    user_id = str(update.effective_user.id)
-    if not context.args:
-        update.message.reply_text("Укажите тикер для удаления: /delete AAPL")
-        return
-    ticker = context.args[0].upper()
-    remove_favorite_ticker(user_id, ticker)
-    update.message.reply_text(f"\U0001F5D1 {ticker} удалён из избранного.")
-
-def notify_news():
-    for user_id, tickers in get_favorites().items():
-        for ticker in tickers:
-            articles = fetch_news_for_ticker(ticker)
-            for article in articles[:1]:
-                try:
-                    analysis = ai_analyze_news(article)
-                    text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\n{analysis}"
-                except Exception as e:
-                    logging.error(f"AI анализ не удался: {e}")
-                    text = f"\U0001F4F0 {article['title']}\n{article['url']}\n\nНе удалось получить анализ новости."
-
-                bot.send_message(chat_id=user_id, text=text)
+    # Планировщик
+    scheduler.add_job(notify_undervalued, 'interval', hours=4)
+    scheduler.start()
 
 def notify_undervalued():
-    results = weekly_undervalued_stocks_search()
-    for user_id in get_favorites():
-        if results:
-            bot.send_message(chat_id=user_id, text="\U0001F4C9 Недооценённые акции недели:")
-            for stock in results:
-                bot.send_message(chat_id=user_id, text=stock)
-        else:
-            bot.send_message(chat_id=user_id, text="Недооценённых акций не найдено.")
+    try:
+        undervalued = weekly_undervalued_stocks_search()
+        if undervalued:
+            text = "📉 Еженедельные недооценённые акции:\n\n" + "\n".join(undervalued)
+            # Рассылка по всем пользователям
+            for user_id in get_favorites():
+                bot.send_message(chat_id=user_id, text=text)
+    except Exception as e:
+        logging.exception("Ошибка в notify_undervalued")
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(notify_news, 'interval', hours=4, timezone=pytz.utc)
-scheduler.add_job(notify_undervalued, 'cron', day_of_week='mon', hour=10, timezone=pytz.utc)
-scheduler.start()
-
+dispatcher = Dispatcher(bot, None, workers=0)
 dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("analyze", analyze))
 dispatcher.add_handler(CommandHandler("favorites", favorites))
-dispatcher.add_handler(CommandHandler("delete", delete))
-dispatcher.add_handler(CallbackQueryHandler(handle_buttons))
-
-def test_undervalued(update: Update, context: CallbackContext):
-    results = weekly_undervalued_stocks_search(["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"])  # можно любой список
-    if results:
-        update.message.reply_text("📉 Тест: недооценённые акции:")
-        for stock in results:
-            msg = f"{stock['ticker']} — P/E: {stock['P/E']}, Margin of Safety: {round(stock['Margin of Safety'] * 100, 1)}%"
-            update.message.reply_text(msg)
-    else:
-        update.message.reply_text("😕 Недооценённых акций не найдено.")
-
-dispatcher.add_handler(CommandHandler("test_undervalued", test_undervalued))
+dispatcher.add_handler(CommandHandler("weekly", weekly))
+dispatcher.add_handler(CallbackQueryHandler(callback_handler))
 
 if __name__ == "__main__":
-    bot.set_webhook(url=f"https://{HOST}/{TOKEN}")
-    logging.info(f"\u2705 Webhook установлен: https://{HOST}/{TOKEN}")
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(port=10000)
