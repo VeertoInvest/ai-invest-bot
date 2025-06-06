@@ -9,12 +9,16 @@ from news_handler import fetch_news_for_ticker, ai_analyze_news
 from undervalued_stocks import weekly_undervalued_stocks_search
 from memory import add_favorite_ticker, get_favorites
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Загрузка токена
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ Переменная окружения BOT_TOKEN не задана!")
+
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
-
 logging.basicConfig(level=logging.INFO)
 
+# Планировщик
 scheduler = BackgroundScheduler()
 
 def start(update, context):
@@ -111,7 +115,6 @@ def setup():
     bot.set_webhook(full_url)
     print(f"✅ Webhook установлен: {full_url}")
 
-    # Планировщик
     scheduler.add_job(notify_undervalued, 'interval', hours=4)
     scheduler.start()
 
@@ -120,13 +123,13 @@ def notify_undervalued():
         undervalued = weekly_undervalued_stocks_search()
         if undervalued:
             text = "📉 Еженедельные недооценённые акции:\n\n" + "\n".join(undervalued)
-            # Рассылка по всем пользователям
-            for user_id in get_favorites():
+            for user_id in get_favorites().keys():
                 bot.send_message(chat_id=user_id, text=text)
     except Exception as e:
         logging.exception("Ошибка в notify_undervalued")
 
-dispatcher = Dispatcher(bot, None, workers=0)
+# Обработчики команд
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(CommandHandler("analyze", analyze))
 dispatcher.add_handler(CommandHandler("favorites", favorites))
