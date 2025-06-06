@@ -1,14 +1,17 @@
-user_favorites = {}
+# memory.py
+from collections import defaultdict
 
-def add_favorite(user_id, ticker):
-    user_favorites.setdefault(user_id, set()).add(ticker.upper())
+# Память для хранения избранных тикеров пользователей
+user_favorites = defaultdict(set)
 
-def remove_favorite(user_id, ticker):
-    if user_id in user_favorites:
-        user_favorites[user_id].discard(ticker.upper())
+def add_favorite_ticker(user_id: int, ticker: str):
+    """Добавить тикер в избранное пользователя"""
+    user_favorites[user_id].add(ticker.upper())
 
-def get_favorites(user_id):
-    return list(user_favorites.get(user_id, []))
+def remove_favorite_ticker(user_id: int, ticker: str):
+    """Удалить тикер из избранного пользователя"""
+    user_favorites[user_id].discard(ticker.upper())
 
-def has_favorite(user_id, ticker):
-    return ticker.upper() in user_favorites.get(user_id, set())
+def get_favorites(user_id: int):
+    """Получить список избранных тикеров пользователя"""
+    return list(user_favorites[user_id])
