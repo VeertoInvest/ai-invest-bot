@@ -1,41 +1,66 @@
 import os
 import requests
-from openai import OpenAI
+import openai
+from datetime import datetime, timedelta
 
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# API-ключи из переменных окружения
+NEWS_API_KEY = os.getenv("NEWS_API_KEY") or os.getenv("NEWSAPI_KEY")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+def fetch_news_for_ticker(ticker, max_articles=3):
+    if not NEWS_API_KEY:
+        return []
 
-def fetch_news_for_ticker(ticker, limit=3):
-    url = (
-        f"https://newsapi.org/v2/everything?"
-        f"q={ticker}&sortBy=publishedAt&language=en&pageSize={limit}&apiKey={NEWS_API_KEY}"
-    )
-    response = requests.get(url)
-    data = response.json()
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": ticker,
+        "language": "en",
+        "pageSize": max_articles,
+        "sortBy": "publishedAt",
+        "apiKey": NEWS_API_KEY,
+        "from": (datetime.utcnow() - timedelta(days=2)).strftime('%Y-%m-%d'),
+    }
 
-    articles = []
-    for article in data.get("articles", []):
-        articles.append({
-            "title": article["title"],
-            "description": article["description"] or "",
-            "url": article["url"]
-        })
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-    return articles
+        if data.get("status") != "ok":
+            return []
+
+        return data.get("articles", [])
+    except Exception as e:
+        print(f"❌ Ошибка при получении новостей: {e}")
+        return []
 
 def ai_analyze_news(article):
     try:
-        prompt = f"Проанализируй новость и выдай краткий вывод: {article['title']}\n{article['description']}"
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.7,
+        content = article.get("title", "") + "\n\n" + article.get("description", "")
+        if not content.strip():
+            return "⚠️ Недостаточно данных для анализа."
+
+        prompt = (
+            f"Прочти следующую новость и сделай краткий анализ:\n"
+            f"1. Основной смысл.\n"
+            f"2. Тональность (позитивная, негативная, нейтральная).\n"
+            f"3. Тип новости (финансовая, продуктовая, судебная, рынок и т.д.).\n"
+            f"4. Насколько сильно она повлияет на цену акций?\n"
+            f"5. Краткая рекомендация (покупать / держать / продавать).\n\n"
+            f"Текст:\n\"{content}\"\n\nОтветь кратко и на русском языке:"
         )
-        return response['choices'][0]['message']['content']
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+
+        analysis = response['choices'][0]['message']['content']
+        return analysis.strip()
+
     except Exception as e:
-        print(f"❌ Ошибка анализа новости: {e}")
-        return "Не удалось получить анализ новости."
+        print(f"❌ Ошибка AI-анализа: {e}")
+        return "❌ Не удалось получить анализ новости."
 
