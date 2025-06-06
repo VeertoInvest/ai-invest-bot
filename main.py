@@ -1,5 +1,6 @@
 import os
 import logging
+import pytz
 from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Dispatcher, CommandHandler, CallbackContext, CallbackQueryHandler
@@ -95,7 +96,7 @@ def notify_undervalued():
             bot.send_message(chat_id=user_id, text="Недооценённых акций не найдено.")
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(notify_news, 'interval', hours=4)
+scheduler.add_job(notify_news, 'interval', hours=4, timezone=pytz.utc)
 scheduler.add_job(notify_undervalued, 'cron', day_of_week='mon', hour=10)
 scheduler.start()
 
