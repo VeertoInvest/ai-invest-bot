@@ -123,6 +123,18 @@ dispatcher.add_handler(CommandHandler("favorites", favorites))
 dispatcher.add_handler(CommandHandler("delete", delete))
 dispatcher.add_handler(CallbackQueryHandler(handle_buttons))
 
+def test_undervalued(update: Update, context: CallbackContext):
+    results = weekly_undervalued_stocks_search(["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"])  # можно любой список
+    if results:
+        update.message.reply_text("📉 Тест: недооценённые акции:")
+        for stock in results:
+            msg = f"{stock['ticker']} — P/E: {stock['P/E']}, Margin of Safety: {round(stock['Margin of Safety'] * 100, 1)}%"
+            update.message.reply_text(msg)
+    else:
+        update.message.reply_text("😕 Недооценённых акций не найдено.")
+
+dispatcher.add_handler(CommandHandler("test_undervalued", test_undervalued))
+
 if __name__ == "__main__":
     bot.set_webhook(url=f"https://{HOST}/{TOKEN}")
     logging.info(f"\u2705 Webhook установлен: https://{HOST}/{TOKEN}")
