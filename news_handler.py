@@ -38,11 +38,8 @@ def fetch_news_for_ticker(ticker, max_articles=3):
 
 def ai_analyze_news(article):
     try:
-        title = article.get("title", "")
-        description = article.get("description", "")
-        content = f"{title}\n\n{description}".strip()
-
-        if not content:
+        content = article.get("title", "") + "\n\n" + article.get("description", "")
+        if not content.strip():
             return "⚠️ Недостаточно данных для анализа."
 
         prompt = (
@@ -67,3 +64,4 @@ def ai_analyze_news(article):
     except Exception as e:
         print(f"❌ Ошибка AI-анализа: {e}")
         return "❌ Не удалось получить анализ новости."
+
